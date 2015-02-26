@@ -1,161 +1,148 @@
-package ca.ualberta.ssrg.movies;
+package ca.ualberta.ssrg.movies.es;
 
-import android.app.Activity;
-import android.content.Context;
-import android.content.Intent;
-import android.os.Bundle;
-import android.view.View;
-import android.widget.AdapterView;
-import android.widget.AdapterView.OnItemClickListener;
-import android.widget.AdapterView.OnItemLongClickListener;
-import android.widget.ArrayAdapter;
-import android.widget.ListView;
-import android.widget.Toast;
-import ca.ualberta.ssrg.androidelasticsearch.R;
-import ca.ualberta.ssrg.movies.es.ESMovieManager;
-import ca.ualberta.ssrg.movies.es.Movie;
-import ca.ualberta.ssrg.movies.es.Movies;
-import ca.ualberta.ssrg.movies.es.MoviesController;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.UnsupportedEncodingException;
+import java.lang.reflect.Type;
 
-public class MainActivity extends Activity {
+import org.apache.http.HttpResponse;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.DefaultHttpClient;
 
-	private ListView movieList;
-	private Movies movies;
-	private ArrayAdapter<Movie> moviesViewAdapter;
-	private ESMovieManager movieManager;
-	private MoviesController moviesController;
+import android.util.Log;
+import ca.ualberta.ssrg.movies.es.data.Hits;
+import ca.ualberta.ssrg.movies.es.data.SearchHit;
+import ca.ualberta.ssrg.movies.es.data.SearchResponse;
+import ca.ualberta.ssrg.movies.es.data.SimpleSearchCommand;
 
-	private Context mContext = this;
+import com.google.gson.Gson;
+import com.google.gson.JsonIOException;
+import com.google.gson.JsonSyntaxException;
+import com.google.gson.reflect.TypeToken;
 
-	@Override
-	protected void onCreate(Bundle savedInstanceState) {
-		super.onCreate(savedInstanceState);
-		setContentView(R.layout.activity_main);
+public class ESMovieManager {
 
-		movieList = (ListView) findViewById(R.id.movieList);
+	private static final String TAG = "MovieSearch";
+	private Gson gson;
+	private Movies movies = new Movies();
+
+	public Movies getMovies() {
+		return movies;
 	}
 
-	@Override
-	protected void onStart() {
-		super.onStart();
-
-		movies = new Movies();
-		moviesViewAdapter = new ArrayAdapter<Movie>(this, R.layout.list_item,movies);
-		movieList.setAdapter(moviesViewAdapter);
-		movieManager = new ESMovieManager("");
-
-		// Show details when click on a movie
-		movieList.setOnItemClickListener(new OnItemClickListener() {
-
-			@Override
-			public void onItemClick(AdapterView<?> parent, View view, int pos,	long id) {
-				int movieId = movies.get(pos).getId();
-				startDetailsActivity(movieId);
-			}
-
-		});
-
-		// Delete movie on long click
-		movieList.setOnItemLongClickListener(new OnItemLongClickListener() {
-
-			@Override
-			public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
-				Movie movie = movies.get(position);
-				Toast.makeText(mContext, "Deleting " + movie.getTitle(), Toast.LENGTH_LONG).show();
-
-				Thread thread = new DeleteThread(movie.getId());
-				thread.start();
-
-				return true;
-			}
-		});
+	public ESMovieManager(String search) {
+		gson = new Gson();
+		searchMovies(search, null);
 	}
 
-	@Override
-	protected void onResume() {
-		super.onResume();
-		
-		
-
-		// Refresh the list when visible
-		// TODO: Search all
-		
-	}
-	
-	/** 
-	 * Called when the model changes
-	 */
-	public void notifyUpdated() {
-		// Thread to update adapter after an operation
-		Runnable doUpdateGUIList = new Runnable() {
-			public void run() {
-				moviesViewAdapter.notifyDataSetChanged();
-			}
-		};
-		
-		runOnUiThread(doUpdateGUIList);
-	}
-
-	/** 
-	 * Search for movies with a given word(s) in the text view
-	 * @param view
-	 */
-	public void search(View view) {
-		movies.clear();
-
-		// TODO: Extract search query from text view
-		
-		// TODO: Run the search thread
-		
-	}
-	
 	/**
-	 * Starts activity with details for a movie
-	 * @param movieId Movie id
+	 * Get a movie with the specified id
 	 */
-	public void startDetailsActivity(int movieId) {
-		Intent intent = new Intent(mContext, DetailsActivity.class);
-		intent.putExtra(DetailsActivity.MOVIE_ID, movieId);
+	public Movie getMovie(int id) {
+		SearchHit<Movie> sr = null;
+		HttpClient httpClient = new DefaultHttpClient();
+		HttpGet httpGet = new HttpGet(movies.getResourceUrl() + id);
 
-		startActivity(intent);
-	}
-	
-	/**
-	 * Starts activity to add a new movie
-	 * @param view
-	 */
-	public void add(View view) {
-		Intent intent = new Intent(mContext, AddActivity.class);
-		startActivity(intent);
-	}
+		HttpResponse response = null;
 
-
-	class SearchThread extends Thread {
-		// TODO: Implement search thread
+		try {
+			response = httpClient.execute(httpGet);
+		} catch (ClientProtocolException e1) {
+			throw new RuntimeException(e1);
+		} catch (IOException e1) {
+			throw new RuntimeException(e1);
+		}
 		
-	}
+		Type searchHitType = new TypeToken<SearchHit<Movie>>() {}.getType();
 
-	
-	class DeleteThread extends Thread {
-		private int movieId;
-
-		public DeleteThread(int movieId) {
-			this.movieId = movieId;
+		try {
+			sr = gson.fromJson(
+					new InputStreamReader(response.getEntity().getContent()),
+					searchHitType);
+		} catch (JsonIOException e) {
+			throw new RuntimeException(e);
+		} catch (JsonSyntaxException e) {
+			throw new RuntimeException(e);
+		} catch (IllegalStateException e) {
+			throw new RuntimeException(e);
+		} catch (IOException e) {
+			throw new RuntimeException(e);
 		}
 
-		@Override
-		public void run() {
-			moviesController.deleteMovie(movieId);
+		return sr.getSource();
 
-			// Remove movie from local list
-			for (int i = 0; i < movies.size(); i++) {
-				Movie m = movies.get(i);
+	}
 
-				if (m.getId() == movieId) {
-					movies.remove(m);
-					break;
-				}
-			}
+	/**
+	 * Get movies with the specified search string. If the search does not
+	 * specify fields, it searches on all the fields.
+	 */
+	public void searchMovies(String searchString, String field) {
+		Movies result = new Movies();
+
+		/**
+		 * Creates a search request from a search string and a field
+		 */
+
+		HttpPost searchRequest = new HttpPost(movies.getSearchUrl());
+
+		String[] fields = null;
+		if (field != null) {
+			throw new UnsupportedOperationException("Not implemented!");
 		}
+
+		SimpleSearchCommand command = new SimpleSearchCommand(searchString);
+
+		String query = gson.toJson(command);
+		Log.i(TAG, "Json command: " + query);
+
+		StringEntity stringEntity = null;
+		try {
+			stringEntity = new StringEntity(query);
+		} catch (UnsupportedEncodingException e) {
+			throw new RuntimeException(e);
+		}
+
+		searchRequest.setHeader("Accept", "application/json");
+		searchRequest.setEntity(stringEntity);
+		
+		HttpClient httpClient = new DefaultHttpClient();
+		
+		HttpResponse response = null;
+		try {
+			response = httpClient.execute(searchRequest);
+		} catch (ClientProtocolException e) {
+			throw new RuntimeException(e);
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
+		
+		/**
+		 * Parses the response of a search
+		 */
+		Type searchResponseType = new TypeToken<SearchResponse<Movie>>() {
+		}.getType();
+		
+		try {
+			SearchResponse<Movie> esResponse = gson.fromJson(
+					new InputStreamReader(response.getEntity().getContent()),
+					searchResponseType);
+		} catch (JsonIOException e) {
+			throw new RuntimeException(e);
+		} catch (JsonSyntaxException e) {
+			throw new RuntimeException(e);
+		} catch (IllegalStateException e) {
+			throw new RuntimeException(e);
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
+		
+		// Extract the movies from the esResponse and put them in result
+
+		movies.notifyObservers();
 	}
 }
